@@ -12,7 +12,7 @@ Run each test, then fill in Actual, Pass/Fail, and Evidence (screenshot file nam
 | TC07 | Scholar submits duplicate semester; GWA 0.50; negative count | Each rejected with a clear message | | | |
 | TC08 | Log in as scholar: read another record (browser console) and call verify_submission | No other data returned; verify denied "Staff only." | | | |
 | TC09 | Staff Return a record with reason; scholar Corrects and resubmits; refresh | Pending verification; history kept | | | |
-| TC10 | Staff Approve A01 (Compliant), Hold A02 (deficient); scholar tries decide_renewal | Approved and Held saved; scholar denied | | | |
+| TC10 | Staff Approve A01 (Compliant), Hold A02 (deficient); scholar tries decide_renewal | Approved and Held saved; scholar denied | | | |screenshots/4_renewal.png
 
 ## TC08 console commands (run while logged in as the scholar, F12 > Console)
 ```js
