@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scholarship Monitoring System</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:0;background:#f4f6f8;color:#1b2a3a}
+header{background:#1f3a5f;color:#fff;padding:10px 20px;display:flex;gap:16px;align-items:center}
+header h1{font-size:18px;margin:0;flex:1} main{padding:16px 20px;max-width:1200px;margin:auto}
+.card{background:#fff;border:1px solid #d5dbe1;border-radius:6px;padding:14px;margin-bottom:14px}
+h2{margin:0 0 10px;font-size:17px} h3{font-size:15px}
+.row{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px} label{font-size:13px;display:flex;flex-direction:column;gap:3px}
+input,select,button{font:inherit;padding:6px 8px} button{cursor:pointer}
+table{border-collapse:collapse;width:100%;font-size:13px} th,td{border:1px solid #d5dbe1;padding:5px 7px;text-align:left;vertical-align:top}
+th{background:#e8edf2} .stats{display:flex;gap:12px;margin:10px 0} .stat{border:1px solid #d5dbe1;padding:8px 16px;border-radius:6px;font-size:13px}
+.stat b{display:block;font-size:24px} .ok{color:#14733a} .bad{color:#b3261e} #msg{padding:0 20px;font-weight:600;min-height:20px}
+td button{margin:1px;padding:2px 6px;font-size:12px} small{color:#555}
+</style></head><body>
+<header><h1>Scholarship Monitoring System</h1><span id="who"></span><button id="out" hidden>Log out</button></header>
+<p id="msg"></p><main id="app"></main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
+<script>
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const $ = id => document.getElementById(id), app = $("app");
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt = t => new Date(t).toLocaleString("en-PH", {timeZone: "Asia/Manila"});
+const num = id => $(id).value === "" ? null : Number($(id).value);
+const opts = a => a.map(x => `<option>${x}</option>`).join("");
+const YEARS = ["2025-2026", "2026-2027"];
+let me, S = {}, editId = null, openId = null;
+
+function msg(t, bad) { $("msg").textContent = t; $("msg").className = bad ? "bad" : "ok"; }
+async function rpc(fn, args, okText) {
+  const { data, error } = await db.rpc(fn, args);
+  if (error) { msg(error.message, true); return null; }
+  msg(okText); return data ?? true;
+}
+$("out").onclick = async () => { await db.auth.signOut(); location.reload(); };
+
+async function start() {
+  const { data: { session } } = await db.auth.getSession();
+  if (!session) return showLogin();
+  const { data } = await db.from("profiles").select("*").eq("user_id", session.user.id).maybeSingle();
+  $("out").hidden = false;
+  if (!data) { app.innerHTML = "<p>This account has no profile. Ask staff to register you.</p>"; return; }
+  me = data; $("who").textContent = `${me.full_name} (${me.role})`;
+  me.role === "staff" ? staffView() : scholarView();
+}
+function showLogin() {
+  app.innerHTML = `<div class="card"><h2>Log in</h2><div class="row"><label>Email<input id="em"></label>
+  <label>Password<input id="pw" type="password"></label></div><button id="go">Log in</button></div>`;
+  $("go").onclick = async () => {
+    const { error } = await db.auth.signInWithPassword({ email: $("em").value, password: $("pw").value });
+    error ? msg(error.message, true) : (msg(""), start());
+  };
+}
+
+/* ---------------- Scholar ---------------- */
+async function scholarView() {
+  const { data } = await db.from("submissions").select("*").order("submitted_at", { ascending: false });
+  S.subs = data || [];
+  app.innerHTML = `<div class="card"><h2 id="ft">Submit semester grades</h2><div class="row">
+   <label>Academic year<select id="f_ay">${opts(YEARS)}</select></label>
+   <label>Semester<select id="f_sem">${opts([1, 2])}</select></label>
+   <label>GWA (1.00 to 5.00)<input id="f_gwa" type="number" step="0.01"></label>
+   <label>Enrolled units<input id="f_units" type="number"></label>
+   <label>Failed subjects<input id="f_failed" type="number"></label>
+   <label>Incomplete grades<input id="f_inc" type="number"></label>
+   <label>Dropped subjects<input id="f_drop" type="number"></label>
+   <label>Grade-document reference<input id="f_ref"></label></div>
+   <button id="sub">Submit</button> <button id="cancel" hidden>Cancel correction</button></div>
+   <div class="card"><h2>My submissions</h2><table><tr><th>Year</th><th>Sem</th><th>GWA</th><th>Units</th>
+   <th>Verification</th><th>Compliance</th><th>Renewal decision</th><th></th></tr>
+   ${S.subs.map(r => `<tr><td>${r.academic_year}</td><td>${r.semester}</td><td>${r.gwa}</td><td>${r.enrolled_units}</td>
+   <td>${r.verification_status}${r.verification_reason ? "<br><small>Reason: " + esc(r.verification_reason) + "</small>" : ""}</td>
+   <td>${r.compliance_result}</td><td>${r.renewal_decision}${r.decision_note ? "<br><small>" + esc(r.decision_note) + "</small>" : ""}</td>
+   <td>${r.verification_status === "Returned" ? `<button data-act="edit" data-id="${r.submission_id}">Correct</button>` : ""}</td></tr>`).join("")}
+   </table></div>`;
+  $("sub").onclick = async () => {
+    const a = { p_year: $("f_ay").value, p_sem: +$("f_sem").value, p_gwa: num("f_gwa"), p_units: num("f_units"),
+      p_failed: num("f_failed"), p_inc: num("f_inc"), p_drop: num("f_drop"), p_ref: $("f_ref").value };
+    if (editId) a.p_id = editId;
+    const ok = await rpc(editId ? "resubmit_grades" : "submit_grades", a,
+      editId ? "Corrected and resubmitted. Status: Pending verification." : "Submitted. Status: Pending verification.");
+    if (ok) { editId = null; scholarView(); }
+  };
+  $("cancel").onclick = () => { editId = null; scholarView(); };
+  app.onclick = e => {
+    const b = e.target.closest("button[data-act=edit]"); if (!b) return;
+    const r = S.subs.find(x => x.submission_id === +b.dataset.id); editId = r.submission_id;
+    $("f_ay").value = r.academic_year; $("f_sem").value = r.semester; $("f_gwa").value = r.gwa;
+    $("f_units").value = r.enrolled_units; $("f_failed").value = r.failed_count; $("f_inc").value = r.incomplete_count;
+    $("f_drop").value = r.dropped_count; $("f_ref").value = r.evidence_ref;
+    $("ft").textContent = "Correct returned submission"; $("sub").textContent = "Resubmit"; $("cancel").hidden = false;
+    scrollTo(0, 0);
+  };
+}
+
+/* ---------------- Staff ---------------- */
+const who = id => S.prof.find(p => p.user_id === id);
+const progOf = id => { const a = S.asg.find(x => x.scholar_id === id); return S.prog.find(p => p.program_id === a?.program_id); };
+
+function staffView() {
+  app.innerHTML = `<div class="card"><h2>Semester and dashboard</h2><div class="row">
+   <label>Academic year<select id="d_ay">${opts(YEARS.slice().reverse())}</select></label>
+   <label>Semester<select id="d_sem">${opts([1, 2])}</select></label></div><div class="stats" id="dash"></div></div>
+   <div class="card"><h2>Register scholar</h2><div class="row">
+   <label>Student ID<input id="r_no"></label><label>Full name<input id="r_name"></label>
+   <label>Email (same as login)<input id="r_em"></label><label>Program<select id="r_prog"></select></label></div>
+   <button id="r_go">Register and assign</button></div>
+   <div class="card"><h2>Submissions</h2><div class="row">
+   <label>Search ID or name<input id="q"></label>
+   <label>Program<select id="f_prog"><option value="">All</option><option>Merit Scholar</option><option>Community Scholar</option></select></label>
+   <label>Compliance<select id="f_comp"><option value="">All</option><option>Not evaluated</option><option>Compliant</option><option>With Deficiency</option></select></label></div>
+   <div id="tbl"></div><div id="detail"></div></div>
+   <div class="card"><h2>History log (latest 60)</h2><div id="hist"></div></div>`;
+  ["d_ay", "d_sem", "f_prog", "f_comp"].forEach(i => $(i).onchange = paint); $("q").oninput = paint;
+  $("r_go").onclick = async () => {
+    const ok = await rpc("register_scholar", { p_student_no: $("r_no").value, p_name: $("r_name").value,
+      p_email: $("r_em").value, p_program: +$("r_prog").value }, "Scholar registered and assigned.");
+    if (ok) { ["r_no", "r_name", "r_em"].forEach(i => $(i).value = ""); load(); }
+  };
+  app.onclick = async e => {
+    const b = e.target.closest("button[data-act]"); if (!b) return;
+    const id = +b.dataset.id, act = b.dataset.act; let r;
+    if (act === "detail") { openId = id; return paint(); }
+    if (act === "verify") r = await rpc("verify_submission", { p_id: id, p_status: "Verified", p_reason: null }, "Marked Verified.");
+    if (act === "return") { const t = prompt("Reason for returning (required):"); if (t === null) return;
+      r = await rpc("verify_submission", { p_id: id, p_status: "Returned", p_reason: t }, "Returned to scholar."); }
+    if (act === "eval") r = await rpc("evaluate_submission", { p_id: id }, "Evaluated.");
+    if (act === "approve" || act === "hold") { const t = prompt("Decision note:"); if (t === null) return;
+      r = await rpc("decide_renewal", { p_id: id, p_decision: act === "approve" ? "Approved" : "Held", p_note: t }, "Renewal decision saved."); }
+    if (r) { if (act === "eval") openId = id; load(); }
+  };
+  load(true);
+}
+async function load(first) {
+  const [pr, pf, as, sb, hs] = await Promise.all([
+    db.from("programs").select("*").order("program_id"), db.from("profiles").select("*"),
+    db.from("scholar_assignments").select("*"), db.from("submissions").select("*").order("submission_id"),
+    db.from("decision_history").select("*").order("created_at", { ascending: false }).limit(60)]);
+  S = { prog: pr.data || [], prof: pf.data || [], asg: as.data || [], subs: sb.data || [], hist: hs.data || [] };
+  if (first) $("r_prog").innerHTML = S.prog.map(p => `<option value="${p.program_id}">${esc(p.name)}</option>`).join("");
+  paint();
+}
+function paint() {
+  const cur = S.subs.filter(x => x.academic_year === $("d_ay").value && x.semester === +$("d_sem").value);
+  const n = f => cur.filter(f).length;
+  $("dash").innerHTML = [["Assigned scholars", S.asg.length], ["Pending verification", n(x => x.verification_status === "Pending verification")],
+    ["Compliant", n(x => x.compliance_result === "Compliant")], ["With Deficiency", n(x => x.compliance_result === "With Deficiency")]]
+    .map(([k, v]) => `<div class="stat"><b>${v}</b>${k}</div>`).join("");
+  const q = $("q").value.toLowerCase(), fp = $("f_prog").value, fc = $("f_comp").value;
+  const rows = cur.filter(r => { const p = who(r.scholar_id) || {}, g = progOf(r.scholar_id) || {};
+    return (!q || ((p.student_no || "") + " " + (p.full_name || "")).toLowerCase().includes(q)) && (!fp || g.name === fp) && (!fc || r.compliance_result === fc); });
+  $("tbl").innerHTML = `<table><tr><th>ID</th><th>Name</th><th>Program</th><th>GWA</th><th>Units</th><th>F/INC/D</th><th>Evidence</th>
+   <th>Submitted (Manila)</th><th>Verification</th><th>Compliance</th><th>Renewal</th><th>Actions</th></tr>` +
+   rows.map(r => { const p = who(r.scholar_id) || {}, g = progOf(r.scholar_id) || {}, i = r.submission_id; return `<tr>
+   <td>${esc(p.student_no)}</td><td>${esc(p.full_name)}</td><td>${esc(g.name)}</td><td>${r.gwa}</td><td>${r.enrolled_units}</td>
+   <td>${r.failed_count}/${r.incomplete_count}/${r.dropped_count}</td><td>${esc(r.evidence_ref)}</td><td>${fmt(r.submitted_at)}</td>
+   <td>${r.verification_status}${r.verification_reason ? "<br><small>" + esc(r.verification_reason) + "</small>" : ""}</td>
+   <td>${r.compliance_result}</td><td>${r.renewal_decision}${r.decision_note ? "<br><small>" + esc(r.decision_note) + "</small>" : ""}</td>
+   <td><button data-act="verify" data-id="${i}">Verify</button><button data-act="return" data-id="${i}">Return</button>
+   <button data-act="eval" data-id="${i}">Evaluate</button><button data-act="approve" data-id="${i}">Approve</button>
+   <button data-act="hold" data-id="${i}">Hold</button><button data-act="detail" data-id="${i}">Checks</button></td></tr>`; }).join("") +
+   (rows.length ? "" : `<tr><td colspan="12">No records match.</td></tr>`) + "</table>";
+  const o = S.subs.find(x => x.submission_id === openId);
+  $("detail").innerHTML = o && o.evaluation ? `<h3>Policy checks for ${esc(who(o.scholar_id)?.student_no)}: ${o.compliance_result}</h3><ul>` +
+    o.evaluation.map(c => `<li class="${c.ok ? "ok" : "bad"}">${c.ok ? "PASS" : "FAIL"}: ${esc(c.check)} - ${esc(c.detail)}</li>`).join("") + "</ul>" : "";
+  $("hist").innerHTML = `<table><tr><th>Time (Manila)</th><th>Student</th><th>Action</th><th>Change</th><th>By</th><th>Note</th></tr>` +
+    S.hist.map(h => { const s = S.subs.find(x => x.submission_id === h.submission_id);
+      return `<tr><td>${fmt(h.created_at)}</td><td>${esc(who(s?.scholar_id)?.student_no)}</td><td>${h.action_type}</td>
+      <td>${esc(h.old_value ?? "")} &rarr; ${esc(h.new_value ?? "")}</td><td>${esc(who(h.actor_id)?.full_name)}</td><td>${esc(h.note)}</td></tr>`; }).join("") + "</table>";
+}
+start();
+</script></body></html>
